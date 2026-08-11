@@ -985,33 +985,55 @@ def run_reconciliation(
     reporter.check_cancelled()
 
     # --------------------------------------------------------------
-    # Step 7: Sub-ledger invoices that never showed up in the VAT
-    # Transaction file at all, restricted to the two VAT accounts (Sales VAT
-    # payable and ICAG VAT receivable) - so this only flags invoices where
-    # the missing GL posting is actually VAT-relevant. Checked against every
-    # Spain invoice in the VAT file (not just the 4 tax codes handled above),
-    # so an invoice posted under a different tax code isn't wrongly flagged.
-    # Sub-ledger rows with no Invoice NO. are excluded (not invoice-driven).
+    # Step 7: Sub-ledger invoices that never showed up in the VAT filing,
+    # restricted to the two VAT accounts (Sales VAT payable and ICAG VAT
+    # receivable) - so this only flags invoices where the missing GL
+    # posting is actually VAT-relevant. Sub-ledger rows with no Invoice NO.
+    # are excluded (not invoice-driven).
+    #
+    # Checked against BOTH:
+    #   (a) the raw VAT Transaction file (Spain, any tax code) - the
+    #       broader, original check
+    #   (b) the "Overall VAT Comparison" sheet itself (vat_out - Spain,
+    #       only the 4 tax codes this script processes, deduped) - a
+    #       stricter check that also catches invoices sitting under a tax
+    #       code this script doesn't otherwise handle
+    # A row is included if it's missing from EITHER list, with two
+    # separate Yes/No columns showing exactly which check(s) it failed -
+    # since (b) is a subset of (a), a "No" on (a) always implies "No" on
+    # (b) too, but not the reverse.
     # --------------------------------------------------------------
     reporter.progress(0.40, "Finding sub-ledger invoices missing from the VAT file ...")
     MISSED_INV_ACCOUNTS = [ACCOUNT_SALES, ACCOUNT_ICAG_RCR]
-    spain_invoices = set(
+    vat_transaction_invoices = set(
         vat.loc[vat["Our Tax Registration No."] == TAX_REG_NO, "Invoice No."].astype(str).str.strip()
     )
-    # The literal "nan"/"none" test matters because the Invoice NO. column has
-    # already been through .astype(str): on pandas 2 that turns a blank cell
+    overall_comparison_invoices = set(vat_out["Invoice No."].astype(str).str.strip())
+
+    # The literal "nan"/"none"/"nat" test matters because the Invoice NO. column
+    # has already been through .astype(str): on pandas 2 that turns a blank cell
     # into the *string* "nan", which passes notna() and would wrongly flag
     # every blank-invoice row here. pandas 3 keeps it as NaN, so both spellings
     # of "blank" are excluded explicitly and the result is version-independent.
     sub_invoice_no = sub["Invoice NO."].astype(str).str.strip()
-    missed = sub[
+    candidate = sub[
         sub["Invoice NO."].notna()
         & ~sub_invoice_no.str.lower().isin(["", "nan", "none", "nat"])
-        & (~sub["Invoice NO."].isin(spain_invoices))
         & (sub["Account Number"].isin(MISSED_INV_ACCOUNTS))
     ].copy()
+
+    missing_from_vat_file = ~sub_invoice_no[candidate.index].isin(vat_transaction_invoices)
+    missing_from_overall = ~sub_invoice_no[candidate.index].isin(overall_comparison_invoices)
+
+    missed = candidate[missing_from_vat_file | missing_from_overall].copy()
+    missed["Missing from VAT Transaction File"] = missing_from_vat_file[missed.index].map({True: "Yes", False: "No"})
+    missed["Missing from Overall VAT Comparison"] = missing_from_overall[missed.index].map({True: "Yes", False: "No"})
+
     write_dataframe_sheet(wb, "Missed Inv in VAT Transaction", missed)
-    reporter.log(f"{len(missed)} sub-ledger row(s) flagged as missing from the VAT Transaction file.")
+    reporter.log(
+        f"{len(missed)} sub-ledger row(s) flagged as missing from the VAT Transaction "
+        "file and/or the Overall VAT Comparison sheet."
+    )
     reporter.check_cancelled()
 
     # --------------------------------------------------------------

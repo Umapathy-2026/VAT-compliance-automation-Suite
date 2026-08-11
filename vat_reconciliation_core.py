@@ -1026,6 +1026,12 @@ def run_reconciliation(
     missing_from_overall = ~sub_invoice_no[candidate.index].isin(overall_comparison_invoices)
 
     missed = candidate[missing_from_vat_file | missing_from_overall].copy()
+    # Ragged sub-ledger rows (see the column-shift export defect handled in
+    # build_comparison_frame) leave "Unnamed: N" placeholder columns behind.
+    # Those are export plumbing, not data worth showing on this sheet.
+    unnamed_cols = [c for c in missed.columns if re.fullmatch(r"Unnamed: \d+", str(c))]
+    if unnamed_cols:
+        missed = missed.drop(columns=unnamed_cols)
     missed["Missing from VAT Transaction File"] = missing_from_vat_file[missed.index].map({True: "Yes", False: "No"})
     missed["Missing from Overall VAT Comparison"] = missing_from_overall[missed.index].map({True: "Yes", False: "No"})
 

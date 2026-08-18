@@ -51,15 +51,20 @@ modules in the application folder; rebuild this file with:
 """
 
 import base64
-import importlib.util
+import importlib
 import os
+import site
 import sys
 import tkinter as tk
 import types
 from tkinter import messagebox, ttk
 
 # Third-party packages, mapped to the name used to install them.
+# numpy is listed explicitly even though no module here imports it directly -
+# pandas depends on it, and a machine where it's missing or broken otherwise
+# only surfaces that as a raw ImportError once pandas itself is loaded.
 REQUIRED_PACKAGES = {
+    "numpy": "numpy",
     "pandas": "pandas",
     "openpyxl": "openpyxl",
     "requests": "requests",
@@ -102,20 +107,82 @@ def _show_error(title, message):
     root.destroy()
 
 
-def _missing_packages():
-    return [install for module, install in REQUIRED_PACKAGES.items()
-            if importlib.util.find_spec(module) is None]
+def _import_failures():
+    """(install_name, "ExceptionType: message") for each required package
+    that fails to import - not just a bare "missing" label. A package can be
+    on disk and still fail to import for reasons that have nothing to do
+    with installation (a broken DLL, an ABI mismatch between numpy/pandas
+    builds, antivirus quarantine, ...) - swallowing the real exception hides
+    exactly the information needed to tell "not installed" apart from
+    "installed but broken", which is the difference that matters once the
+    obvious causes (wrong interpreter, PYTHONNOUSERSITE) are ruled out."""
+    failures = []
+    for module, install in REQUIRED_PACKAGES.items():
+        try:
+            importlib.import_module(module)
+        except Exception as exc:
+            failures.append((install, f"{type(exc).__name__}: {exc}"))
+    return failures
+
+
+def _user_site_diagnostics():
+    """Explains the "pip says installed, app says missing" case: packages
+    installed with `pip install --user` only work if the interpreter's user
+    site-packages directory is enabled and actually on sys.path. Corporate
+    machines commonly set PYTHONNOUSERSITE, which silently disables it -
+    pip doesn't check that variable, only Python's import machinery does."""
+    lines = [f"site.ENABLE_USER_SITE: {site.ENABLE_USER_SITE}"]
+    try:
+        user_site = site.getusersitepackages()
+        lines.append(f"user site-packages: {user_site} (exists: {os.path.isdir(user_site)})")
+    except Exception as exc:
+        lines.append(f"user site-packages: could not determine ({exc})")
+    lines.append(f"PYTHONNOUSERSITE env var: {os.environ.get('PYTHONNOUSERSITE')!r}")
+    return "\\n".join(f"    {line}" for line in lines)
 
 
 def main():
-    missing = _missing_packages()
-    if missing:
+    failures = _import_failures()
+    if failures:
+        missing = [name for name, _ in failures]
+        # Naming the exact interpreter matters: on a machine with more than
+        # one Python installed, "pip install" and this app can silently
+        # resolve to different ones - `pip` reports success while this
+        # dialog still shows, because the packages went into a different
+        # interpreter's site-packages than the one that opened this file.
+        # Showing sys.executable turns that from a confusing back-and-forth
+        # into a one-line fix. The user-site diagnostics cover the
+        # *same-interpreter* variant of this problem, where
+        # `pip install --user` genuinely wrote to the right place but the
+        # running app still can't see it (PYTHONNOUSERSITE or elevation).
+        # The per-package error text below covers everything else - a
+        # package can be correctly installed and still fail to import for
+        # reasons "pip install" won't fix at all (broken DLL, numpy/pandas
+        # ABI mismatch, antivirus quarantine, ...).
         _show_error(
             "Missing Python packages",
-            "These Python packages need to be installed:\\n\\n"
-            + "\\n".join(f"    {name}" for name in missing)
-            + "\\n\\nInstall them by running this at a command prompt:\\n\\n"
-            f"    pip install {' '.join(missing)}",
+            "These Python packages could not be imported:\\n\\n"
+            + "\\n".join(f"    {name}: {err}" for name, err in failures)
+            + "\\n\\nThis app is running under:\\n\\n"
+            f"    {sys.executable}\\n"
+            f"    Python {sys.version.split()[0]}\\n\\n"
+            "If 'pip install' already reports these as satisfied, check "
+            "whether your user site-packages is actually visible to this "
+            "interpreter:\\n\\n"
+            + _user_site_diagnostics()
+            + "\\n\\nIf the error above is something other than "
+            "'ModuleNotFoundError' (e.g. a DLL load failure or a version "
+            "conflict), reinstalling won't fix it by itself - the exact "
+            "error text is the real clue and is worth sharing as-is when "
+            "asking for help.\\n\\nTo reinstall for THIS interpreter "
+            "anyway, run this exact command at a command prompt (important "
+            "if more than one Python is installed - plain 'pip install' "
+            "can target a different one):\\n\\n"
+            f'    "{sys.executable}" -m pip install --force-reinstall {" ".join(missing)}\\n\\n'
+            "If that still doesn't work, run the same command from an "
+            "Administrator command prompt to install system-wide instead "
+            "of to your user site-packages - that sidesteps "
+            "PYTHONNOUSERSITE/elevation issues entirely.",
         )
         return
 

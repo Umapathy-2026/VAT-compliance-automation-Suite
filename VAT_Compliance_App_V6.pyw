@@ -25,6 +25,7 @@ All heavy work runs on background threads; progress is pushed back to the
 GUI thread through a queue and drained with `root.after`.
 """
 
+import base64
 import os
 import queue
 import random
@@ -631,34 +632,57 @@ else:
 OUTPUT_FOLDER = APP_DIR / "outputs"
 OUTPUT_FOLDER.mkdir(exist_ok=True)
 
-# Company logo shown top-left of the sidebar. Drop a file with this name next
-# to this app to enable it - it's entirely optional, the sidebar falls back
-# to a plain icon if the file isn't there.
-LOGO_FILENAME = "johnson_electric_logo.png"
-LOGO_MAX_WIDTH = 190   # fits the sidebar's content width (230 - padding)
-LOGO_MAX_HEIGHT = 60
+# Company logo shown top-left of the sidebar. Drop a file with one of these
+# names next to this app to enable it - it's entirely optional, the sidebar
+# falls back to a plain icon if none of them are found.
+LOGO_FILENAMES = ("logo.png", "johnson_electric_logo.png")
+LOGO_MAX_WIDTH = 188   # fits the sidebar's content width (240 - padding)
+LOGO_MAX_HEIGHT = 56
+
+# Set by tools/build_single_file_v6.py when generating the standalone bundle
+# (a base64-encoded PNG) so the shared single-file build doesn't need logo.png
+# sitting next to it. Left None here - the modular app always falls through
+# to the file-based lookup below. Do not hand-edit this from source; it's a
+# build-time substitution target.
+_EMBEDDED_LOGO_B64 = None
 
 _logo_image_ref = None  # keeps the PhotoImage alive (Tk drops it if GC'd)
 
 
+def _read_logo_bytes():
+    """Return (raw_bytes, base64_text) for the logo - from the embedded
+    constant if a bundler set one, otherwise from disk. (None, None) if
+    neither is available."""
+    if _EMBEDDED_LOGO_B64:
+        return base64.b64decode(_EMBEDDED_LOGO_B64), _EMBEDDED_LOGO_B64
+    path = next((APP_DIR / name for name in LOGO_FILENAMES if (APP_DIR / name).exists()), None)
+    if path is None:
+        return None, None
+    raw = path.read_bytes()
+    return raw, base64.b64encode(raw).decode("ascii")
+
+
 def load_sidebar_logo():
     """Return a Tk PhotoImage of the company logo, scaled to fit the sidebar,
-    or None if no logo file is present. Uses Pillow for quality resizing when
-    available, falling back to Tk's coarser integer zoom/subsample otherwise."""
+    or None if no logo is available (embedded or on disk). Uses Pillow for
+    quality resizing when available, falling back to Tk's coarser integer
+    zoom/subsample otherwise."""
     global _logo_image_ref
-    path = APP_DIR / LOGO_FILENAME
-    if not path.exists():
+    raw, b64 = _read_logo_bytes()
+    if raw is None:
         return None
 
     try:
+        import io
+
         from PIL import Image, ImageTk
 
-        img = Image.open(path)
+        img = Image.open(io.BytesIO(raw))
         img.thumbnail((LOGO_MAX_WIDTH, LOGO_MAX_HEIGHT), Image.LANCZOS)
         photo = ImageTk.PhotoImage(img)
     except ImportError:
         try:
-            photo = tk.PhotoImage(file=str(path))
+            photo = tk.PhotoImage(data=b64)
             # Coarse integer-ratio downscale - the best Tk can do without Pillow.
             factor = max(1, photo.width() // LOGO_MAX_WIDTH, photo.height() // LOGO_MAX_HEIGHT)
             if factor > 1:
@@ -693,8 +717,8 @@ def open_path(path):
 
 from app_theme import (  # noqa: E402
     C, FONT_TITLE, FONT_SUBTITLE, FONT_CARD_TITLE, FONT_BODY, FONT_BODY_BOLD,
-    FONT_NAV, FONT_LOGO, FONT_MONO, configure_style, make_button, make_card,
-    make_paste_box, make_log_box, append_log, clear_log, make_table,
+    FONT_NAV, FONT_NAV_ACTIVE, FONT_LOGO, FONT_MONO, configure_style, make_button,
+    make_card, make_paste_box, make_log_box, append_log, clear_log, make_table,
     clear_table, labeled_field, card_header_row,
 )
 
@@ -1127,25 +1151,66 @@ class Sidebar(tk.Frame):
                   font=FONT_LOGO, justify="left", anchor="w",
                   wraplength=content_width).pack(anchor="w", pady=(10, 0))
 
+        tk.Frame(self, bg=C.ACCENT_DARK, height=1).pack(fill="x", padx=20, pady=(0, 12))
+
+        self._active_idx = -1
         for i, page_cls in enumerate(PAGES):
-            btn = tk.Label(self, text=f"  {page_cls.ICON}  {page_cls.TITLE}",
-                            bg=C.SIDEBAR_BG, fg=C.SIDEBAR_TEXT, font=FONT_NAV,
-                            anchor="w", padx=16, pady=12, cursor="hand2")
-            btn.pack(fill="x", padx=12, pady=2)
-            btn.bind("<Button-1>", lambda e, idx=i: self.on_select(idx))
-            self.buttons.append(btn)
+            self.buttons.append(self._build_nav_row(i, page_cls))
 
         tk.Frame(self, bg=C.SIDEBAR_BG).pack(fill="both", expand=True)
+        tk.Frame(self, bg=C.ACCENT_DARK, height=1).pack(fill="x", padx=20, pady=(0, 12))
         tk.Label(self, text="Local desktop tool — no server, no browser", bg=C.SIDEBAR_BG,
                   fg=C.SIDEBAR_TEXT, font=("Segoe UI", 8), wraplength=190, justify="left"
-                  ).pack(side="bottom", padx=20, pady=16, anchor="w")
+                  ).pack(side="bottom", padx=20, pady=(0, 16), anchor="w")
+
+    def _build_nav_row(self, idx, page_cls):
+        """A nav row is (outer frame, left accent indicator, label) so the
+        active page gets a solid accent bar down its left edge - a sharper,
+        more deliberate active state than a plain color swap."""
+        row = tk.Frame(self, bg=C.SIDEBAR_BG)
+        row.pack(fill="x", padx=12, pady=2)
+
+        indicator = tk.Frame(row, bg=C.SIDEBAR_BG, width=3)
+        indicator.pack(side="left", fill="y")
+
+        label = tk.Label(row, text=f"  {page_cls.ICON}  {page_cls.TITLE}",
+                           bg=C.SIDEBAR_BG, fg=C.SIDEBAR_TEXT, font=FONT_NAV,
+                           anchor="w", padx=13, pady=12, cursor="hand2")
+        label.pack(side="left", fill="both", expand=True)
+
+        def select(_e):
+            self.on_select(idx)
+
+        def enter(_e):
+            if idx != self._active_idx:
+                row.configure(bg=C.SIDEBAR_BG_HOVER)
+                indicator.configure(bg=C.SIDEBAR_BG_HOVER)
+                label.configure(bg=C.SIDEBAR_BG_HOVER)
+
+        def leave(_e):
+            if idx != self._active_idx:
+                row.configure(bg=C.SIDEBAR_BG)
+                indicator.configure(bg=C.SIDEBAR_BG)
+                label.configure(bg=C.SIDEBAR_BG)
+
+        for widget in (row, indicator, label):
+            widget.bind("<Button-1>", select)
+            widget.bind("<Enter>", enter)
+            widget.bind("<Leave>", leave)
+
+        return row, indicator, label
 
     def set_active(self, idx):
-        for i, btn in enumerate(self.buttons):
+        self._active_idx = idx
+        for i, (row, indicator, label) in enumerate(self.buttons):
             if i == idx:
-                btn.configure(bg=C.SIDEBAR_ACTIVE, fg=C.SIDEBAR_TEXT_ACTIVE, font=(FONT_NAV[0], FONT_NAV[1], "bold"))
+                row.configure(bg=C.SIDEBAR_ACTIVE)
+                indicator.configure(bg=C.ACCENT)
+                label.configure(bg=C.SIDEBAR_ACTIVE, fg=C.SIDEBAR_TEXT_ACTIVE, font=FONT_NAV_ACTIVE)
             else:
-                btn.configure(bg=C.SIDEBAR_BG, fg=C.SIDEBAR_TEXT, font=FONT_NAV)
+                row.configure(bg=C.SIDEBAR_BG)
+                indicator.configure(bg=C.SIDEBAR_BG)
+                label.configure(bg=C.SIDEBAR_BG, fg=C.SIDEBAR_TEXT, font=FONT_NAV)
 
 
 class App(tk.Frame):
@@ -1160,11 +1225,24 @@ class App(tk.Frame):
         content_outer.pack(side="left", fill="both", expand=True)
 
         header = tk.Frame(content_outer, bg=C.PAGE_BG)
-        header.pack(fill="x", padx=32, pady=(28, 4))
-        self.title_label = tk.Label(header, text="", bg=C.PAGE_BG, fg=C.TEXT_DARK, font=FONT_TITLE)
-        self.title_label.pack(anchor="w")
-        self.subtitle_label = tk.Label(header, text="", bg=C.PAGE_BG, fg=C.TEXT_MUTED, font=FONT_SUBTITLE)
-        self.subtitle_label.pack(anchor="w", pady=(4, 0))
+        header.pack(fill="x", padx=32, pady=(28, 0))
+        self.title_label = tk.Label(header, text="", bg=C.PAGE_BG, fg=C.TEXT_DARK, font=FONT_TITLE,
+                                     anchor="w", justify="left")
+        self.title_label.pack(fill="x", anchor="w")
+        self.subtitle_label = tk.Label(header, text="", bg=C.PAGE_BG, fg=C.TEXT_MUTED, font=FONT_SUBTITLE,
+                                        anchor="w", justify="left")
+        self.subtitle_label.pack(fill="x", anchor="w", pady=(4, 14))
+        tk.Frame(header, bg=C.ACCENT, height=2).pack(fill="x")
+
+        # Keep the title/subtitle wrapping to the header's real width instead
+        # of running under the sidebar or off the window on a narrow resize.
+        def on_header_configure(event):
+            wrap = max(200, event.width)
+            for label in (self.title_label, self.subtitle_label):
+                if label.cget("wraplength") != wrap:
+                    label.configure(wraplength=wrap)
+
+        header.bind("<Configure>", on_header_configure)
 
         body_wrap = tk.Frame(content_outer, bg=C.PAGE_BG)
         body_wrap.pack(fill="both", expand=True, padx=32, pady=16)

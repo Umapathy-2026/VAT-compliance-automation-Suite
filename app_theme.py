@@ -17,35 +17,43 @@ from tkinter import ttk
 
 
 class C:
+    # Brand orange, unchanged from the Johnson Electric mark - every other
+    # token here is chosen to make this color read as sharp and deliberate
+    # rather than the whole UI leaning on it for contrast.
     ACCENT = "#F2711C"
     ACCENT_DARK = "#D35400"
-    ACCENT_LIGHT = "#FCEEE3"
+    ACCENT_DEEP = "#B84A0F"       # pressed/emphasis state, one step past hover
+    ACCENT_LIGHT = "#FDE9DA"
     SIDEBAR_BG = "#F2711C"
+    SIDEBAR_BG_HOVER = "#E8660F"  # inactive-row hover, one step darker than the sidebar
     SIDEBAR_ACTIVE = "#FFFFFF"
-    SIDEBAR_TEXT = "#FFE8D9"
-    SIDEBAR_TEXT_ACTIVE = "#D35400"
-    PAGE_BG = "#F7F7F5"
+    SIDEBAR_TEXT = "#FBDCC7"
+    SIDEBAR_TEXT_ACTIVE = "#1C1917"
+    PAGE_BG = "#FAF8F6"    # a hair off white, so white cards read as raised
     CARD_BG = "#FFFFFF"
-    CARD_BORDER = "#E7E5E4"
-    TEXT_DARK = "#1F2937"
-    TEXT_MUTED = "#6B7280"
+    CARD_BORDER = "#E9E2DB"
+    # Warm near-black (echoes the logo's wordmark) instead of a cool gray -
+    # pairs more deliberately with the orange than a generic slate would.
+    TEXT_DARK = "#1C1917"
+    TEXT_MUTED = "#78716C"
     SUCCESS_BG = "#EAF7ED"
     SUCCESS_TEXT = "#1E7B34"
     ERROR_BG = "#FDEDEC"
     ERROR_TEXT = "#B3261E"
     WARN_BG = "#FFF7E6"
     WARN_TEXT = "#8A5B00"
-    LOG_BG = "#FAFAFA"
-    LOG_TEXT = "#374151"
+    LOG_BG = "#FAFAF9"
+    LOG_TEXT = "#3A3532"
 
 
-FONT_TITLE = ("Segoe UI", 20, "bold")
+FONT_TITLE = ("Segoe UI Semibold", 22)
 FONT_SUBTITLE = ("Segoe UI", 10)
-FONT_CARD_TITLE = ("Segoe UI", 12, "bold")
+FONT_CARD_TITLE = ("Segoe UI Semibold", 12)
 FONT_BODY = ("Segoe UI", 10)
-FONT_BODY_BOLD = ("Segoe UI", 10, "bold")
+FONT_BODY_BOLD = ("Segoe UI Semibold", 10)
 FONT_NAV = ("Segoe UI", 11)
-FONT_LOGO = ("Segoe UI", 14, "bold")
+FONT_NAV_ACTIVE = ("Segoe UI Semibold", 11)
+FONT_LOGO = ("Segoe UI Semibold", 13)
 FONT_MONO = ("Consolas", 9)
 
 
@@ -54,8 +62,11 @@ def configure_style():
     style.theme_use("clam")
 
     style.configure("TCombobox", fieldbackground="white", background="white",
-                     bordercolor=C.CARD_BORDER, arrowsize=14)
+                     bordercolor=C.CARD_BORDER, arrowsize=14, arrowcolor=C.TEXT_MUTED)
+    style.map("TCombobox", bordercolor=[("focus", C.ACCENT)],
+              arrowcolor=[("active", C.ACCENT)])
     style.configure("TEntry", fieldbackground="white", bordercolor=C.CARD_BORDER)
+    style.map("TEntry", bordercolor=[("focus", C.ACCENT)])
 
     style.configure("Accent.Horizontal.TProgressbar",
                      troughcolor="#F1F1EF", background=C.ACCENT,
@@ -78,43 +89,65 @@ def make_button(parent, text, command, kind="primary", state="normal", width=Non
     """A flat, hover-aware button styled to match the reference UI (ttk buttons can't
     take arbitrary flat colors reliably across platforms, so a tk.Button is used)."""
     palette = {
-        "primary":   dict(bg=C.ACCENT, fg="white", hover=C.ACCENT_DARK),
-        "secondary": dict(bg="white", fg=C.ACCENT, hover=C.ACCENT_LIGHT),
-        "muted":     dict(bg="#EEEEEC", fg=C.TEXT_DARK, hover="#E2E2DF"),
+        "primary":   dict(bg=C.ACCENT, fg="white", hover=C.ACCENT_DARK,
+                           press=C.ACCENT_DEEP, border=C.ACCENT_DARK),
+        "secondary": dict(bg="white", fg=C.ACCENT, hover=C.ACCENT_LIGHT,
+                           press=C.ACCENT_LIGHT, border=C.ACCENT),
+        "muted":     dict(bg="#F3F1EF", fg=C.TEXT_DARK, hover="#E8E5E1",
+                           press="#DEDAD5", border=C.CARD_BORDER),
     }[kind]
     btn = tk.Button(
         parent, text=text, command=command, state=state,
-        bg=palette["bg"], fg=palette["fg"], activebackground=palette["hover"],
+        bg=palette["bg"], fg=palette["fg"], activebackground=palette["press"],
         activeforeground=palette["fg"], relief="flat", bd=0,
         font=FONT_BODY_BOLD, padx=16, pady=8, cursor="hand2",
         highlightthickness=1, highlightbackground=C.CARD_BORDER,
-        disabledforeground="#B0B0AC",
+        disabledforeground="#B0AAA3",
     )
     if width:
         btn.configure(width=width)
 
     def on_enter(_e):
         if btn["state"] != "disabled":
-            btn.configure(bg=palette["hover"])
+            btn.configure(bg=palette["hover"], highlightbackground=palette["border"])
 
     def on_leave(_e):
         if btn["state"] != "disabled":
-            btn.configure(bg=palette["bg"])
+            btn.configure(bg=palette["bg"], highlightbackground=C.CARD_BORDER)
+
+    def on_press(_e):
+        if btn["state"] != "disabled":
+            btn.configure(bg=palette["press"])
+
+    def on_release(_e):
+        if btn["state"] != "disabled":
+            btn.configure(bg=palette["hover"])
 
     btn.bind("<Enter>", on_enter)
     btn.bind("<Leave>", on_leave)
+    btn.bind("<ButtonPress-1>", on_press)
+    btn.bind("<ButtonRelease-1>", on_release)
     return btn
 
 
-def make_card(parent, title, icon=""):
-    """A white bordered panel with a bold title row. Returns the inner content frame."""
+def _card_shell(parent):
+    """The bordered white panel every card sits in, with a thin accent strip
+    across its top edge - the one piece of brand color that recurs through
+    every content page, not just the sidebar chrome."""
     outer = tk.Frame(parent, bg=C.CARD_BG, highlightbackground=C.CARD_BORDER,
                       highlightthickness=1, bd=0)
     outer.pack(fill="x", pady=(0, 16))
+    tk.Frame(outer, bg=C.ACCENT, height=3).pack(fill="x", side="top")
+    return outer
+
+
+def make_card(parent, title, icon=""):
+    """A white bordered panel with a title row. Returns the inner content frame."""
+    outer = _card_shell(parent)
 
     header = tk.Frame(outer, bg=C.CARD_BG)
-    header.pack(fill="x", padx=20, pady=(16, 8))
-    tk.Label(header, text=f"{icon}  {title}".strip(), bg=C.CARD_BG, fg=C.ACCENT,
+    header.pack(fill="x", padx=20, pady=(14, 8))
+    tk.Label(header, text=f"{icon}  {title}".strip(), bg=C.CARD_BG, fg=C.TEXT_DARK,
               font=FONT_CARD_TITLE).pack(anchor="w")
 
     body = tk.Frame(outer, bg=C.CARD_BG)
@@ -196,13 +229,12 @@ def labeled_field(parent, label_text, row):
 
 def card_header_row(parent, title, icon=""):
     """Card title on the left, action buttons area on the right — returns (card_body, actions_frame)."""
-    outer = tk.Frame(parent, bg=C.CARD_BG, highlightbackground=C.CARD_BORDER,
-                      highlightthickness=1, bd=0)
-    outer.pack(fill="both", expand=True, pady=(0, 16))
+    outer = _card_shell(parent)
+    outer.pack_configure(fill="both", expand=True)
 
     header = tk.Frame(outer, bg=C.CARD_BG)
-    header.pack(fill="x", padx=20, pady=(16, 8))
-    tk.Label(header, text=f"{icon}  {title}".strip(), bg=C.CARD_BG, fg=C.ACCENT,
+    header.pack(fill="x", padx=20, pady=(14, 8))
+    tk.Label(header, text=f"{icon}  {title}".strip(), bg=C.CARD_BG, fg=C.TEXT_DARK,
               font=FONT_CARD_TITLE).pack(side="left")
     actions = tk.Frame(header, bg=C.CARD_BG)
     actions.pack(side="right")

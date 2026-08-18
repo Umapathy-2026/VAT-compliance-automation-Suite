@@ -1,2 +1,11 @@
 __pycache__/
 *.pyc
+
+# PyInstaller's intermediate build directory - large, disposable, and
+# regenerated fresh on every build (packaging/dist/ holds the actual output
+# .exe, which IS tracked). One PyInstaller run left a 101MB DLL in here that
+# GitHub hard-rejects outright (>100MB) if it's ever committed, so this
+# whole directory stays out of git rather than relying on remembering to
+# exclude the next oversized file it happens to produce. Regenerate with:
+#   python -m PyInstaller packaging/VATComplianceAutomation.spec --distpath packaging/dist --workpath packaging/build --noconfirm
+packaging/build/
